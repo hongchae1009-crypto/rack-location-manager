@@ -137,8 +137,11 @@ table.tbl tbody tr.armed{background:var(--org-bg)}
 .empty-row td{text-align:center;color:var(--tx3);padding:30px;font-size:13px}
 .vcount{font-family:var(--fm);font-size:10px;font-weight:700;color:var(--org);background:var(--org-bg);border:1px solid var(--org-bd);border-radius:6px;padding:1px 5px;margin-left:5px}
 tr.subvial td{border-top:1px dashed var(--bd2);background:var(--bg2)}
-.vial-row{display:grid;grid-template-columns:0.8fr 1fr 1.1fr 34px;gap:6px;margin-bottom:7px}
-@media(max-width:680px){.vial-row{grid-template-columns:1fr 1fr}}
+.vial-row{display:grid;grid-template-columns:0.9fr 1.4fr 34px;gap:6px;margin-bottom:7px}
+#mPick{z-index:150}
+.mx-cell.picksel{outline:2px solid var(--green);outline-offset:-2px}
+.mx-cell.picksel .mc.occ{background:var(--green-bg);color:#157a5b}
+.mx-cell.pickable:hover{outline:2px solid var(--blue);outline-offset:-2px}
 
 /* modal */
 .modal-ov{position:fixed;inset:0;background:rgba(20,24,32,.55);backdrop-filter:blur(2px);
@@ -288,6 +291,18 @@ textarea.fld{resize:vertical;min-height:56px;font-size:13px;font-family:var(--fm
   </div>
   <div class="modal-foot"><button class="btn btn-danger btn-sm" id="rDelete" style="visibility:hidden">삭제</button>
     <div class="right"><button class="btn" data-close="mReagent">취소</button><button class="btn btn-p" id="rSave">저장</button></div></div>
+</div></div>
+
+<!-- 배치 피커 모달 -->
+<div class="modal-ov" id="mPick"><div class="modal"><div class="modal-hd">
+  <h2 id="pickTitle">위치 선택</h2><button class="modal-x" data-close="mPick">&times;</button></div>
+  <div class="modal-body">
+    <div class="tabs" id="pickTabs" style="margin-bottom:10px"></div>
+    <div class="matrix-scroll" id="pickGrid"></div>
+    <div class="subhint" style="margin-top:8px">빈 칸 클릭 = 이 바이알 배치 · 회색 = 사용중 · ✓ = 현재 선택</div>
+  </div>
+  <div class="modal-foot"><button class="btn btn-danger btn-sm" id="pickNone">미배치로</button>
+    <div class="right"><button class="btn" data-close="mPick">닫기</button></div></div>
 </div></div>
 
 <!-- 슬롯 상세 모달 -->
@@ -621,15 +636,43 @@ function renderVialEditor(){
   const racks=S.config.racks;
   $('#rVials').innerHTML=S._draftVials.map((v,i)=>{
     const rid=v.rackId||(racks[0]&&racks[0].id)||'';
-    const selfKey=v.vid?S._slotOfVid[v.vid]:null;
-    const rackOpts=racks.map(rk=>`<option value="${esc(rk.id)}"${rk.id===rid?' selected':''}>${esc(rk.name||rk.code)}</option>`).join('');
-    const slotOpts='<option value="">— 미배치 —</option>'+emptySlots(rid,selfKey).map(s=>`<option value="${s.val}"${s.val===v.slot?' selected':''}>${esc(s.code)}</option>`).join('');
+    let label='＋ 배치',cls='';
+    if(v.slot){const p=v.slot.split(':');label=buildLocationCode(rid,+p[1],+p[0]);cls='btn-g';}
     return `<div class="vial-row" data-i="${i}">
       <input class="fld" data-vf="amount" value="${esc(v.amount)}" placeholder="용량 mg">
-      <select class="fld" data-vf="rack">${rackOpts}</select>
-      <select class="fld" data-vf="slot">${slotOpts}</select>
+      <button class="btn btn-sm ${cls}" type="button" data-vplace="${i}" style="width:100%;justify-content:center">${esc(label)}</button>
       <button class="mini-x" type="button" data-vdel="${i}">✕</button></div>`;
   }).join('');
+}
+function openPicker(i){
+  syncDraftFromDOM();S._pickVial=i;
+  const d=S._draftVials[i]||{};
+  S._pickRack=d.rackId||S.ui.activeRackId||(S.config.racks[0]&&S.config.racks[0].id);
+  renderPickerGrid();show('mPick');
+}
+function renderPickerGrid(){
+  const rid=S._pickRack,d=S._draftVials[S._pickVial]||{};
+  const rk=S.config.racks.find(r=>r.id===rid);
+  $('#pickTabs').innerHTML=S.config.racks.map(r=>`<div class="tab ${r.id===rid?'on':''}" data-prack="${esc(r.id)}">${esc(r.name||r.code)}</div>`).join('');
+  if(!rk){$('#pickGrid').innerHTML='<div class="subhint" style="padding:16px">랙 없음</div>';$('#pickTitle').textContent='위치 선택';return;}
+  const sib={};S._draftVials.forEach((v,i)=>{if(i!==S._pickVial&&v.rackId===rid&&v.slot)sib[v.slot]=1;});
+  const colStyle=(rk.colStyle||S.config.colStyle);
+  let h='<table class="mx"><thead><tr><th class="corner">slot＼col</th>';
+  for(let c=0;c<rk.cols;c++)h+=`<th>${esc(colLabel(c,colStyle))}</th>`;
+  h+='</tr></thead><tbody>';
+  for(let r=0;r<rk.rows;r++){
+    h+=`<tr><th class="rowh">${String(r+1).padStart(+S.config.slotPad||2,'0')}</th>`;
+    for(let c=0;c<rk.cols;c++){
+      const key=slotKey(rid,r,c),a=S.assignments[key],val=r+':'+c;
+      if(d.rackId===rid&&d.slot===val){h+=`<td class="mx-cell picksel" data-pr="${r}" data-pc="${c}" title="현재 선택"><div class="mc occ">✓</div></td>`;}
+      else if(a){h+=`<td class="mx-cell" title="${esc(a.kcode)} · ${esc(a.locationCode)}"><div class="mc occ" style="opacity:.5">${esc(a.kcode)}</div></td>`;}
+      else if(sib[val]){h+=`<td class="mx-cell" title="이 저장에서 다른 바이알이 선택함"><div class="mc" style="background:var(--org-bg);color:#8a5a12">•</div></td>`;}
+      else{h+=`<td class="mx-cell empty pickable" data-pr="${r}" data-pc="${c}" title="선택: ${esc(buildLocationCode(rid,c,r))}"></td>`;}
+    }
+    h+='</tr>';
+  }
+  $('#pickGrid').innerHTML=h+'</tbody></table>';
+  $('#pickTitle').textContent=(d.amount?d.amount+'mg ':'')+'위치 선택 — '+(rk.name||rk.code);
 }
 function syncDraftFromDOM(){
   $$('#rVials .vial-row').forEach(row=>{const d=S._draftVials[+row.dataset.i];if(!d)return;
@@ -870,7 +913,9 @@ function bind(){
   // generic close
   $$('[data-close]').forEach(b=>b.onclick=()=>hide(b.dataset.close));
   $$('.modal-ov').forEach(ov=>ov.addEventListener('click',e=>{if(e.target===ov)hide(ov.id);}));
-  document.addEventListener('keydown',e=>{if(e.key==='Escape'){$$('.modal-ov.show').forEach(m=>{if(m.id==='mCam')closeCamera();else hide(m.id);});}});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'){
+    if($('#mPick').classList.contains('show')){hide('mPick');return;}
+    $$('.modal-ov.show').forEach(m=>{if(m.id==='mCam')closeCamera();else hide(m.id);});}});
 
   // scan input
   const si=$('#scanInput');
@@ -879,14 +924,17 @@ function bind(){
   // reagent modal
   $('#rSave').onclick=saveReagent;$('#rDelete').onclick=deleteReagent;
   $('#rAddVial').onclick=()=>{syncDraftFromDOM();S._draftVials.push({vid:'',amount:'',note:'',rackId:S.ui.activeRackId,slot:''});renderVialEditor();};
-  $('#rVials').addEventListener('click',e=>{const x=e.target.closest('[data-vdel]');if(!x)return;
-    syncDraftFromDOM();S._draftVials.splice(+x.dataset.vdel,1);if(!S._draftVials.length)S._draftVials.push({vid:'',amount:'',note:'',rackId:S.ui.activeRackId,slot:''});renderVialEditor();});
+  $('#rVials').addEventListener('click',e=>{
+    const del=e.target.closest('[data-vdel]'),pl=e.target.closest('[data-vplace]');
+    if(del){syncDraftFromDOM();S._draftVials.splice(+del.dataset.vdel,1);if(!S._draftVials.length)S._draftVials.push({vid:'',amount:'',note:'',rackId:S.ui.activeRackId,slot:''});renderVialEditor();return;}
+    if(pl){openPicker(+pl.dataset.vplace);}});
   $('#rVials').addEventListener('input',e=>{const inp=e.target.closest('[data-vf=amount]');if(!inp)return;
     const row=inp.closest('.vial-row');if(row&&S._draftVials[+row.dataset.i])S._draftVials[+row.dataset.i].amount=inp.value;});
-  $('#rVials').addEventListener('change',e=>{const sel=e.target.closest('select[data-vf]');if(!sel)return;
-    const row=sel.closest('.vial-row');const d=S._draftVials[+row.dataset.i];if(!d)return;
-    if(sel.dataset.vf==='rack'){syncDraftFromDOM();d.rackId=sel.value;d.slot='';renderVialEditor();}
-    else if(sel.dataset.vf==='slot'){d.slot=sel.value;}});
+  // 배치 피커
+  $('#pickTabs').addEventListener('click',e=>{const t=e.target.closest('[data-prack]');if(!t)return;S._pickRack=t.dataset.prack;renderPickerGrid();});
+  $('#pickGrid').addEventListener('click',e=>{const cell=e.target.closest('.mx-cell.pickable,.mx-cell.picksel');if(!cell||cell.dataset.pr===undefined)return;
+    const d=S._draftVials[S._pickVial];if(d){d.rackId=S._pickRack;d.slot=cell.dataset.pr+':'+cell.dataset.pc;}hide('mPick');renderVialEditor();});
+  $('#pickNone').onclick=()=>{const d=S._draftVials[S._pickVial];if(d)d.slot='';hide('mPick');renderVialEditor();};
 
   // slot modal
   $('#slotUnassign').onclick=()=>{if(slotModalKey){unassign(slotModalKey);hide('mSlot');}};
