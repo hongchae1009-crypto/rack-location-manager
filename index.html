@@ -137,7 +137,8 @@ table.tbl tbody tr.armed{background:var(--org-bg)}
 .empty-row td{text-align:center;color:var(--tx3);padding:30px;font-size:13px}
 .vcount{font-family:var(--fm);font-size:10px;font-weight:700;color:var(--org);background:var(--org-bg);border:1px solid var(--org-bd);border-radius:6px;padding:1px 5px;margin-left:5px}
 tr.subvial td{border-top:1px dashed var(--bd2);background:var(--bg2)}
-.vial-row{display:grid;grid-template-columns:1fr 34px;gap:8px;margin-bottom:7px}
+.vial-row{display:grid;grid-template-columns:0.8fr 1fr 1.1fr 34px;gap:6px;margin-bottom:7px}
+@media(max-width:680px){.vial-row{grid-template-columns:1fr 1fr}}
 
 /* modal */
 .modal-ov{position:fixed;inset:0;background:rgba(20,24,32,.55);backdrop-filter:blur(2px);
@@ -362,7 +363,7 @@ textarea.fld{resize:vertical;min-height:56px;font-size:13px;font-family:var(--fm
 (function(){
 "use strict";
 const KEY='rack-loc-v1';
-const SEED_REAGENTS=[]; /* 공개판: 시약 데이터 미포함 — 가져오기(xlsx)로 로컬에서 불러오세요 */
+const SEED_REAGENTS=[]; /* 공개판: 시약 데이터 미포함 */
 const $=s=>document.querySelector(s);
 const $$=s=>Array.from(document.querySelectorAll(s));
 function today(){const d=new Date();const p=n=>String(n).padStart(2,'0');
@@ -598,27 +599,55 @@ function openReagent(kcode){
   $('#rVial').value=r?(r.vialCode||''):'';$('#rName').value=r?(r.name||''):'';
   $('#rGroup').value=r?(r.group||''):'';
   $('#rMw').value=r?(r.mw??''):'';$('#rSmiles').value=r?(r.smiles||''):'';
-  S._draftVials=r&&r.vials&&r.vials.length?r.vials.map(v=>({vid:v.vid,amount:v.amount,note:v.note||''})):[{vid:'',amount:'',note:''}];
+  S._draftVials=(r&&r.vials&&r.vials.length?r.vials:[{vid:'',amount:'',note:''}]).map(v=>{
+    let key=v.vid?S._slotOfVid[v.vid]:null,rid=S.ui.activeRackId,slot='';
+    if(key){const p=key.split(':');rid=p[0];slot=p[1]+':'+p[2];}
+    return {vid:v.vid||'',amount:v.amount,note:v.note||'',rackId:rid,slot:slot};
+  });
   renderVialEditor();
   show('mReagent');setTimeout(()=>{if(!r)$('#rKcode').focus();},50);
 }
+function emptySlots(rackId,selfKey){
+  const rk=S.config.racks.find(r=>r.id===rackId);if(!rk)return[];
+  const out=[];
+  for(let r=0;r<rk.rows;r++)for(let c=0;c<rk.cols;c++){
+    const key=slotKey(rackId,r,c);
+    if(!S.assignments[key]||key===selfKey)out.push({val:r+':'+c,code:buildLocationCode(rackId,c,r)});
+  }
+  return out;
+}
 function renderVialEditor(){
-  $('#rVials').innerHTML=S._draftVials.map((v,i)=>`<div class="vial-row" data-i="${i}">
-    <input class="fld" data-vf="amount" value="${esc(v.amount)}" placeholder="용량 mg (예: 78.9)">
-    <button class="mini-x" type="button" data-vdel="${i}">✕</button></div>`).join('')||'<div class="subhint">바이알 없음</div>';
+  if(!S._draftVials.length){$('#rVials').innerHTML='<div class="subhint">바이알 없음</div>';return;}
+  const racks=S.config.racks;
+  $('#rVials').innerHTML=S._draftVials.map((v,i)=>{
+    const rid=v.rackId||(racks[0]&&racks[0].id)||'';
+    const selfKey=v.vid?S._slotOfVid[v.vid]:null;
+    const rackOpts=racks.map(rk=>`<option value="${esc(rk.id)}"${rk.id===rid?' selected':''}>${esc(rk.name||rk.code)}</option>`).join('');
+    const slotOpts='<option value="">— 미배치 —</option>'+emptySlots(rid,selfKey).map(s=>`<option value="${s.val}"${s.val===v.slot?' selected':''}>${esc(s.code)}</option>`).join('');
+    return `<div class="vial-row" data-i="${i}">
+      <input class="fld" data-vf="amount" value="${esc(v.amount)}" placeholder="용량 mg">
+      <select class="fld" data-vf="rack">${rackOpts}</select>
+      <select class="fld" data-vf="slot">${slotOpts}</select>
+      <button class="mini-x" type="button" data-vdel="${i}">✕</button></div>`;
+  }).join('');
+}
+function syncDraftFromDOM(){
+  $$('#rVials .vial-row').forEach(row=>{const d=S._draftVials[+row.dataset.i];if(!d)return;
+    d.amount=row.querySelector('[data-vf=amount]').value.trim();
+    const rs=row.querySelector('[data-vf=rack]'),ss=row.querySelector('[data-vf=slot]');
+    if(rs)d.rackId=rs.value;if(ss)d.slot=ss.value;});
 }
 function saveReagent(){
   const kc=$('#rKcode').value.trim().toUpperCase();
   if(!kc){toast('K코드를 입력하세요');return;}
   if(!reEditKcode&&S._byKcode[kc]){toast('이미 존재하는 K코드');return;}
+  syncDraftFromDOM();
   const existing=reEditKcode?(S._byKcode[kc].vials||[]):[];
   let n=newVidN(existing);
-  let vials=$$('#rVials .vial-row').map(row=>{
-    const d=S._draftVials[+row.dataset.i]||{};
-    return {vid:d.vid||'',amount:row.querySelector('[data-vf=amount]').value.trim(),note:d.note||''};
-  });
-  if(!vials.length)vials=[{vid:'',amount:'',note:''}];
-  vials.forEach(v=>{if(!v.vid)v.vid=kc+'#'+(n++);});
+  let drafts=S._draftVials.slice();
+  if(!drafts.length)drafts=[{vid:'',amount:'',note:'',rackId:'',slot:''}];
+  drafts.forEach(d=>{if(!d.vid)d.vid=kc+'#'+(n++);});
+  const vials=drafts.map(d=>({vid:d.vid,amount:d.amount,note:d.note||''}));
   const kept=new Set(vials.map(v=>v.vid));
   existing.forEach(v=>{if(!kept.has(v.vid)){const key=S._slotOfVid[v.vid];if(key)delete S.assignments[key];}});
   const r={kcode:kc,vialCode:$('#rVial').value.trim(),name:$('#rName').value.trim(),
@@ -626,7 +655,21 @@ function saveReagent(){
     amount:vials.map(v=>v.amount).filter(Boolean).join(', '),vials:vials,updated:today()};
   const i=S.reagents.findIndex(x=>x.kcode===kc);
   if(i>=0)S.reagents[i]=Object.assign(S.reagents[i],r);else S.reagents.push(r);
-  save();renderAll();hide('mReagent');toast(reEditKcode?'수정됨':'추가됨');
+  // 바이알별 랙 배치 적용
+  const taken={};let placed=0;
+  drafts.forEach(d=>{
+    const prevKey=S._slotOfVid[d.vid];
+    if(d.slot){
+      const p=d.slot.split(':'),rr=+p[0],cc=+p[1],key=slotKey(d.rackId,rr,cc);
+      if(taken[key]){toast('같은 슬롯 중복 선택 — 일부 건너뜀');return;}
+      const ex=S.assignments[key];
+      if(ex&&ex.vid!==d.vid){if(!confirm('슬롯 '+buildLocationCode(d.rackId,cc,rr)+' 에 '+vialLabel(ex.kcode,ex.amount)+'가 있습니다. 교체할까요?'))return;}
+      if(prevKey&&prevKey!==key)delete S.assignments[prevKey];
+      S.assignments[key]={vid:d.vid,kcode:kc,amount:d.amount,locationCode:buildLocationCode(d.rackId,cc,rr),assignedAt:today()};
+      taken[key]=1;placed++;
+    }else if(prevKey){delete S.assignments[prevKey];}
+  });
+  save();renderAll();hide('mReagent');toast((reEditKcode?'수정됨':'추가됨')+(placed?` · ${placed}개 배치`:''));
 }
 function deleteReagent(){
   if(!reEditKcode)return;if(!confirm(reEditKcode+' 시약을 삭제할까요? (모든 바이알 배정 해제)'))return;
@@ -835,11 +878,15 @@ function bind(){
 
   // reagent modal
   $('#rSave').onclick=saveReagent;$('#rDelete').onclick=deleteReagent;
-  $('#rAddVial').onclick=()=>{S._draftVials.push({vid:'',amount:'',note:''});renderVialEditor();};
+  $('#rAddVial').onclick=()=>{syncDraftFromDOM();S._draftVials.push({vid:'',amount:'',note:'',rackId:S.ui.activeRackId,slot:''});renderVialEditor();};
   $('#rVials').addEventListener('click',e=>{const x=e.target.closest('[data-vdel]');if(!x)return;
-    S._draftVials.splice(+x.dataset.vdel,1);if(!S._draftVials.length)S._draftVials.push({vid:'',amount:'',note:''});renderVialEditor();});
-  $('#rVials').addEventListener('input',e=>{const inp=e.target.closest('[data-vf]');if(!inp)return;
+    syncDraftFromDOM();S._draftVials.splice(+x.dataset.vdel,1);if(!S._draftVials.length)S._draftVials.push({vid:'',amount:'',note:'',rackId:S.ui.activeRackId,slot:''});renderVialEditor();});
+  $('#rVials').addEventListener('input',e=>{const inp=e.target.closest('[data-vf=amount]');if(!inp)return;
     const row=inp.closest('.vial-row');if(row&&S._draftVials[+row.dataset.i])S._draftVials[+row.dataset.i].amount=inp.value;});
+  $('#rVials').addEventListener('change',e=>{const sel=e.target.closest('select[data-vf]');if(!sel)return;
+    const row=sel.closest('.vial-row');const d=S._draftVials[+row.dataset.i];if(!d)return;
+    if(sel.dataset.vf==='rack'){syncDraftFromDOM();d.rackId=sel.value;d.slot='';renderVialEditor();}
+    else if(sel.dataset.vf==='slot'){d.slot=sel.value;}});
 
   // slot modal
   $('#slotUnassign').onclick=()=>{if(slotModalKey){unassign(slotModalKey);hide('mSlot');}};
